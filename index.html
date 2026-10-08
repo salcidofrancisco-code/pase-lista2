@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Asistencia QR - NEM</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        /* Custom styles for the QR scanner layout */
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        #reader { width: 100%; border-radius: 0.5rem; overflow: hidden; }
+        #reader video { object-fit: cover; border-radius: 0.5rem; }
+        .toast { transition: opacity 0.3s ease-in-out; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen flex flex-col">
+
+    <header class="bg-emerald-700 text-white p-4 shadow-md sticky top-0 z-10">
+        <div class="max-w-md mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-bold tracking-tight">Pase de Lista QR</h1>
+            <span class="text-xs bg-emerald-800 px-2 py-1 rounded-full">Fase 6</span>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-md mx-auto w-full p-4 flex flex-col gap-4">
+        
+        <section class="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <label for="groupSelect" class="block text-sm font-semibold text-gray-700 mb-1">Selecciona el Grupo:</label>
+            <select id="groupSelect" class="w-full bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-emerald-500 focus:border-emerald-500 block p-2.5 outline-none">
+                <option value="2º A">2º A</option>
+                <option value="2º B">2º B</option>
+                <option value="2º C">2º C</option>
+                <option value="2º D">2º D</option>
+                <option value="2º E">2º E</option>
+                <option value="2º F">2º F</option>
+                <option value="2º G">2º G</option>
+                <option value="2º H">2º H</option>
+                <option value="2º I">2º I</option>
+                <option value="Tutoría">Tutoría</option>
+            </select>
+        </section>
+
+        <section class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center">
+            <div id="reader" class="bg-black/5 aspect-square flex items-center justify-center relative mb-4">
+                <p id="placeholderText" class="text-gray-400 text-sm absolute text-center px-4">La cámara aparecerá aquí.<br>Presiona "Iniciar Escáner" y <b>permite el acceso</b> para comenzar.</p>
+            </div>
+            
+            <p class="text-xs text-gray-500 text-center mb-3">
+                Recomendado: Google Chrome actualizado y esta página abierta mediante HTTPS.
+            </p>
+
+            <div class="flex gap-2 w-full">
+                <button id="startBtn" onclick="startScanner()" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 px-4 rounded-lg transition-colors shadow-sm text-sm">
+                    📷 Iniciar Escáner
+                </button>
+                <button id="stopBtn" onclick="stopScanner()" class="flex-1 bg-red-500 hover:bg-red-600 text-white font-medium py-2 px-4 rounded-lg transition-colors shadow-sm text-sm hidden">
+                    ⏹️ Detener
+                </button>
+            </div>
+        </section>
+
+        <section class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex-1 flex flex-col min-h-[250px]">
+            <div class="flex justify-between items-end mb-3">
+                <h2 class="text-md font-semibold text-gray-800">Alumnos Escaneados (<span id="scanCount">0</span>)</h2>
+                <button onclick="clearList()" class="text-xs text-red-500 font-medium hover:underline">Limpiar lista</button>
+            </div>
+            
+            <div class="flex-1 bg-gray-50 rounded-lg border border-gray-200 overflow-y-auto max-h-[250px] mb-4 p-2">
+                <ul id="attendanceList" class="divide-y divide-gray-200 text-sm">
+                    <!-- List items will be injected here -->
+                    <li class="text-gray-400 text-center py-4 text-xs italic" id="emptyState">No hay alumnos escaneados aún.</li>
+                </ul>
+            </div>
+
+            <button onclick="exportToCSV()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-colors shadow-sm flex justify-center items-center gap-2">
+                <span>📄 Generar Archivo Excel (CSV)</span>
+            </button>
+        </section>
+
+    </main>
+
+    <!-- UI Notification Toast -->
+    <div id="toast" class="toast fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-4 py-2 rounded-full text-sm shadow-lg opacity-0 pointer-events-none z-50 transition-opacity">
+        Mensaje
+    </div>
+
+    <script>
+        // State variables
+        let html5QrcodeScanner;
+        let scannedSet = new Set();
+        let attendanceData = [];
+        let isScanning = false;
+        
+        // Audio Context for the Beep Sound (No external files needed)
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        function playBeep() {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5 note
+            
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime); // Low volume
+            gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.1);
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.1);
+        }
+
+        // Show Toast Notification
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.innerText = message;
+            toast.classList.remove('opacity-0');
+            setTimeout(() => {
+                toast.classList.add('opacity-0');
+            }, 3000);
+        }
+
+        async function startScanner() {
+            if (isScanning) return;
+
+            if (location.protocol === 'file:') {
+                showError("Esta página se abrió como archivo local. Para usar la cámara, ábrela desde una dirección HTTPS.");
+                return;
+            }
+
+            if (!window.isSecureContext) {
+                showError("Esta página no se está ejecutando en un contexto seguro. Para usar la cámara necesitas HTTPS.");
+                return;
+            }
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showError("Este navegador no permite acceder a la cámara desde esta página. Prueba con Google Chrome actualizado.");
+                return;
+            }
+
+            document.getElementById('placeholderText').style.display = 'none';
+            document.getElementById('startBtn').classList.add('hidden');
+            document.getElementById('stopBtn').classList.remove('hidden');
+
+            try {
+                // Solicitud explícita de permiso a la cámara.
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: "environment" } },
+                    audio: false
+                });
+
+                // Cerramos este flujo temporal; html5-qrcode abrirá la cámara después.
+                stream.getTracks().forEach(track => track.stop());
+
+                html5QrcodeScanner = new Html5Qrcode("reader");
+                const config = {
+                    fps: 10,
+                    qrbox: { width: 250, height: 250 },
+                    aspectRatio: 1.0
+                };
+
+                await html5QrcodeScanner.start(
+                    { facingMode: "environment" },
+                    config,
+                    onScanSuccess,
+                    onScanFailure
+                );
+
+                isScanning = true;
+                showToast("Cámara activada. Apunta al código QR.");
+
+            } catch (err) {
+                console.error("Camera error:", err);
+
+                let message = "No se pudo iniciar la cámara.";
+
+                if (err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError")) {
+                    message = "Permiso de cámara bloqueado. En Chrome: ⋮ → Configuración → Configuración de sitios → Cámara → selecciona este sitio y elige Permitir. Después recarga la página.";
+                } else if (err && err.name === "NotFoundError") {
+                    message = "No se encontró una cámara disponible en este dispositivo.";
+                } else if (err && err.name === "NotReadableError") {
+                    message = "La cámara está siendo utilizada por otra aplicación. Cierra otras apps que usen la cámara e inténtalo de nuevo.";
+                } else if (err && err.name === "SecurityError") {
+                    message = "El navegador bloqueó la cámara por seguridad. Abre esta página mediante HTTPS.";
+                } else if (err && err.message) {
+                    message = "No se pudo iniciar la cámara: " + err.message;
+                }
+
+                showError(message);
+                resetScannerUI();
+            }
+        }
+
+        function showError(message) {
+            showToast(message);
+            const placeholder = document.getElementById('placeholderText');
+            placeholder.textContent = message;
+            placeholder.className = "text-red-600 text-sm text-center px-4 absolute";
+            placeholder.style.display = 'block';
+        }
+
+        async function stopScanner() {
+            if (html5QrcodeScanner) {
+                try {
+                    if (isScanning) {
+                        await html5QrcodeScanner.stop();
+                    }
+                    await html5QrcodeScanner.clear();
+                } catch (err) {
+                    console.error("Error al detener el escáner:", err);
+                } finally {
+                    html5QrcodeScanner = null;
+                    isScanning = false;
+                    resetScannerUI();
+                }
+            } else {
+                resetScannerUI();
+            }
+        }
+
+        function resetScannerUI() {
+            const placeholder = document.getElementById('placeholderText');
+            placeholder.style.display = 'block';
+            placeholder.className = "text-gray-400 text-sm absolute text-center px-4";
+            placeholder.innerHTML = 'La cámara aparecerá aquí.<br>Presiona "Iniciar Escáner" y <b>permite el acceso</b> para comenzar.';
+            document.getElementById('startBtn').classList.remove('hidden');
+            document.getElementById('stopBtn').classList.add('hidden');
+            isScanning = false;
+        }
+
+        function onScanSuccess(decodedText, decodedResult) {
+            // Prevent duplicate entries during the same session
+            if (!scannedSet.has(decodedText)) {
+                scannedSet.add(decodedText);
+                playBeep();
+                
+                const now = new Date();
+                const dateStr = now.toLocaleDateString('es-MX');
+                const timeStr = now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                
+                const studentRecord = {
+                    id: decodedText,
+                    date: dateStr,
+                    time: timeStr
+                };
+                
+                attendanceData.push(studentRecord);
+                updateListUI();
+                showToast("¡Asistencia registrada!");
+            }
+        }
+
+        function onScanFailure(error) {
+            // Usually ignored, happens constantly when no QR is in frame
+        }
+
+        function updateListUI() {
+            const listEl = document.getElementById('attendanceList');
+            const countEl = document.getElementById('scanCount');
+            const emptyState = document.getElementById('emptyState');
+            
+            countEl.innerText = attendanceData.length;
+            
+            if (attendanceData.length > 0) {
+                if (emptyState) emptyState.remove();
+                
+                // Clear current list to rebuild (or append, but rebuild is cleaner for small lists)
+                listEl.innerHTML = '';
+                
+                // Build backwards to show newest first
+                [...attendanceData].reverse().forEach(record => {
+                    const li = document.createElement('li');
+                    li.className = 'py-2 px-2 flex justify-between items-center bg-white mb-1 rounded shadow-sm border border-gray-100';
+                    li.innerHTML = `
+                        <div class="flex flex-col truncate">
+                            <span class="font-medium text-gray-800 truncate">${record.id}</span>
+                            <span class="text-xs text-gray-500">${record.date}</span>
+                        </div>
+                        <span class="text-xs bg-emerald-100 text-emerald-800 px-2 py-1 rounded-full whitespace-nowrap">${record.time}</span>
+                    `;
+                    listEl.appendChild(li);
+                });
+            }
+        }
+
+        function clearList() {
+            scannedSet.clear();
+            attendanceData = [];
+            const listEl = document.getElementById('attendanceList');
+            listEl.innerHTML = '<li class="text-gray-400 text-center py-4 text-xs italic" id="emptyState">No hay alumnos escaneados aún.</li>';
+            document.getElementById('scanCount').innerText = '0';
+            showToast("Lista borrada.");
+        }
+
+        function exportToCSV() {
+            if (attendanceData.length === 0) {
+                showToast("No hay datos para exportar.");
+                return;
+            }
+
+            const group = document.getElementById('groupSelect').value;
+            
+            // Create CSV content (BOM included for UTF-8 Excel compatibility)
+            let csvContent = "\uFEFF"; 
+            csvContent += "Grupo,Alumno (Dato del QR),Fecha,Hora\n";
+            
+            attendanceData.forEach(row => {
+                // Escape quotes and commas in the QR data to prevent CSV breaking
+                let safeStudentData = row.id.replace(/"/g, '""');
+                if (safeStudentData.includes(',')) {
+                    safeStudentData = `"${safeStudentData}"`;
+                }
+                csvContent += `${group},${safeStudentData},${row.date},${row.time}\n`;
+            });
+            
+            // Create download link
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            
+            const safeDate = new Date().toLocaleDateString('es-MX').replace(/\//g, '-');
+            const fileName = `Asistencia_${group}_${safeDate}.csv`;
+            
+            link.setAttribute("href", url);
+            link.setAttribute("download", fileName);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            showToast("Archivo generado con éxito.");
+        }
+    </script>
+</body>
+</html>
